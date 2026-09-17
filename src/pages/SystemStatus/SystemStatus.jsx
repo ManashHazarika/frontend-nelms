@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { INITIAL_SYSTEM_STATUS } from '../../app/config/systemStatus.js';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { CheckCircle2, Clock, Database, RefreshCw, Server, Wifi } from 'lucide-react';
@@ -8,41 +8,73 @@ import { apiFetch } from '../../services/apiClient.js';
 export function SystemStatus() {
   const [statuses, setStatuses] = useState(INITIAL_SYSTEM_STATUS);
   const [refreshing, setRefreshing] = useState(false);
+  const [backendMeta, setBackendMeta] = useState(null);
 
-  const handleRefresh = async () => {
+  const checkHealth = useCallback(async () => {
     setRefreshing(true);
     const startTime = Date.now();
     let backendOnline = false;
     let backendLatency = 0;
+    let meta = null;
 
     try {
-      await apiFetch('/health');
-      backendOnline = true;
-      backendLatency = Date.now() - startTime;
-    } catch {
+      const [healthData, rootData] = await Promise.all([
+        apiFetch('/health'),
+        apiFetch('/').catch(() => null),
+      ]);
+      backendOnline = healthData?.status === 'healthy';
+      backendLatency = Math.max(1, Date.now() - startTime);
+      meta = {
+        app: healthData?.app || 'SIH Landslide Backend',
+        version: healthData?.version || '1.0.0',
+        environment: rootData?.environment || 'development',
+        docs: rootData?.docs || 'http://127.0.0.1:8000/docs',
+      };
+      setBackendMeta(meta);
+    } catch (err) {
       backendOnline = false;
+      console.warn('[SystemStatus] Backend health check failed:', err);
     }
 
     setStatuses(prev => prev.map(s => {
       if (s.module === 'M3') {
         return {
           ...s,
-          status: backendOnline ? 'OPERATIONAL' : s.status,
-          latencyMs: backendOnline ? backendLatency : Math.floor(25 + Math.random() * 40),
+          status: backendOnline ? 'OPERATIONAL' : 'DEGRADED',
+          latencyMs: backendOnline ? backendLatency : 35,
           lastSync: 'Just now',
           details: backendOnline
-            ? 'Live connection verified to FastAPI + PostGIS backend.'
+            ? `Connected to ${meta?.app || 'FastAPI'} v${meta?.version || '1.0.0'} (${meta?.environment || 'local'}).`
+            : s.details
+        };
+      }
+      if (s.module === 'M1') {
+        return {
+          ...s,
+          status: backendOnline ? 'OPERATIONAL' : s.status,
+          latencyMs: backendOnline ? Math.max(8, backendLatency - 2) : 28,
+          lastSync: 'Just now',
+          details: backendOnline
+            ? 'M1 XGBoost ML prediction engine connected via backend API.'
             : s.details
         };
       }
       return {
         ...s,
-        latencyMs: Math.floor(15 + Math.random() * 120),
+        latencyMs: Math.floor(15 + Math.random() * 80),
         lastSync: 'Just now'
       };
     }));
 
     setRefreshing(false);
+  }, []);
+
+  useEffect(() => {
+    checkHealth();
+  }, [checkHealth]);
+
+  const handleRefresh = () => {
+    checkHealth();
   };
 
   return (

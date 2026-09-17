@@ -1,5 +1,6 @@
 import { RISK_ZONES_GEOJSON } from '../../data/geojson/riskZones.js';
 import { apiFetch } from '../apiClient.js';
+import { evaluateSpatialRisk } from './spatialRiskEvaluator.js';
 
 export const riskService = {
   /**
@@ -19,26 +20,37 @@ export const riskService = {
 
   /**
    * Fetch AI prediction for a single coordinate point (M1 interface)
+   * If backend is not available, uses rich spatialRiskEvaluator
    */
-  async getRiskByLocation(lat, lon, rainfall24h = 45.0, slope = 25.0) {
+  async getRiskByLocation(lat, lon, rainfall24h = null, slope = null) {
+    const spatialAssessment = evaluateSpatialRisk(lat, lon);
+    const rain = rainfall24h !== null ? rainfall24h : spatialAssessment.rainfall_24h;
+    const slp = slope !== null ? slope : spatialAssessment.slope_deg;
+
     try {
-      return await apiFetch(`/risk/location?lat=${lat}&lon=${lon}&rainfall_24h=${rainfall24h}&slope=${slope}`);
+      const liveData = await apiFetch(`/risk/location?lat=${lat}&lon=${lon}&rainfall_24h=${rain}&slope=${slp}`);
+      if (liveData) {
+        return {
+          ...spatialAssessment,
+          ...liveData,
+          risk_score: liveData.risk_score ?? spatialAssessment.risk_score,
+          risk_level: liveData.risk_level ?? spatialAssessment.risk_level,
+          confidence: liveData.confidence ?? spatialAssessment.confidence,
+          rainfall_24h: liveData.rainfall_24h ?? rain,
+          slope_deg: liveData.slope ?? slp
+        };
+      }
+      return spatialAssessment;
     } catch {
-      return {
-        latitude: lat,
-        longitude: lon,
-        risk_score: 0.84,
-        risk_level: "HIGH",
-        confidence: 0.89,
-        model_version: "v1.4.2-XGBoost",
-        feature_snapshot: {
-          rainfall_24h: rainfall24h,
-          slope: slope,
-          soil_moisture: 0.78,
-          sar_displacement_mm_yr: -14.2
-        },
-        timestamp: new Date().toISOString()
-      };
+      return spatialAssessment;
     }
+  },
+
+  /**
+   * Directly evaluate spatial risk for tapped coordinate point
+   */
+  evaluatePointRisk(lat, lon) {
+    return evaluateSpatialRisk(lat, lon);
   }
 };
+

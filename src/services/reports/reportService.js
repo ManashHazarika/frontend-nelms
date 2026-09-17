@@ -23,6 +23,22 @@ function transformBackendReport(report) {
 }
 
 export const reportService = {
+  /**
+   * Fetch field reports standard GeoJSON FeatureCollection (M4 GIS Dashboard layer)
+   */
+  async getReportsGeoJSON(statusFilter = null) {
+    try {
+      const url = statusFilter ? `/reports/geojson?status=${statusFilter}` : '/reports/geojson';
+      const data = await apiFetch(url);
+      if (data && data.type === 'FeatureCollection' && Array.isArray(data.features) && data.features.length > 0) {
+        return data;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
   async getReports(filters = {}) {
     try {
       const params = {};

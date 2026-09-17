@@ -9,10 +9,13 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL !== undefined
 const API_PREFIX = '/api/v1';
 
 /**
- * Clean path formatter ensuring /api/v1 prefix
+ * Clean path formatter ensuring /api/v1 prefix for API routes while allowing root paths
  */
 function formatEndpoint(endpoint) {
   if (endpoint.startsWith('/api/v1')) {
+    return endpoint;
+  }
+  if (endpoint === '/health' || endpoint === '/' || endpoint.startsWith('/health') || endpoint.startsWith('/ws')) {
     return endpoint;
   }
   return endpoint.startsWith('/') ? `${API_PREFIX}${endpoint}` : `${API_PREFIX}/${endpoint}`;

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { X, ShieldCheck, MapPin, Activity, Droplets, Building2, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { X, ShieldCheck, MapPin, Activity, Droplets, Building2, CheckCircle2, AlertTriangle, Cpu, Copy, Check, Navigation } from 'lucide-react';
 import { useSelection } from '../../app/providers/SelectionContext.jsx';
 import { alertService } from '../../services/alerts/alertService.js';
+import { riskService } from '../../services/risk/riskService.js';
 import { RiskBadge } from '../ui/RiskBadge.jsx';
 import { Button } from '../ui/Button.jsx';
 
@@ -10,13 +11,44 @@ export function LocationDetailsPanel() {
   const [ackLoading, setAckLoading] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [remarks, setRemarks] = useState('');
+  const [mlLoading, setMlLoading] = useState(false);
+  const [livePrediction, setLivePrediction] = useState(null);
+  const [copiedCoords, setCopiedCoords] = useState(false);
 
   if (!selectedFeature) return null;
+
+  const lat = selectedFeature.coordinates ? selectedFeature.coordinates[1] : selectedFeature.latitude;
+  const lon = selectedFeature.coordinates ? selectedFeature.coordinates[0] : selectedFeature.longitude;
+
+  const handleCopyCoords = () => {
+    if (lat === undefined || lon === undefined) return;
+    navigator.clipboard.writeText(`${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+    setCopiedCoords(true);
+    setTimeout(() => setCopiedCoords(false), 2000);
+  };
+
+  const handleRunAiPrediction = async () => {
+    if (lat === undefined || lon === undefined) return;
+    try {
+      setMlLoading(true);
+      const res = await riskService.getRiskByLocation(
+        lat,
+        lon,
+        selectedFeature.rainfall_24h || 65.0,
+        selectedFeature.slope_deg || 30.0
+      );
+      setLivePrediction(res);
+    } catch (err) {
+      console.warn('[LocationDetailsPanel] Live risk prediction error:', err);
+    } finally {
+      setMlLoading(false);
+    }
+  };
 
   const handleAcknowledge = async () => {
     try {
       setAckLoading(true);
-      await alertService.acknowledgeAlert(selectedFeature.id, remarks || 'Acknowledged by DDMO officer');
+      await alertService.acknowledgeAlert(selectedFeature.id || 'LOC-POINT', remarks || 'Acknowledged by DDMO officer');
       setAcknowledged(true);
     } catch (err) {
       console.error('[LocationDetailsPanel] Acknowledge error:', err);
@@ -46,44 +78,94 @@ export function LocationDetailsPanel() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Title & Priority Badge */}
         <div>
-          <div className="flex items-center gap-2 mb-1.5">
-            <RiskBadge level={selectedFeature.severity || 'HIGH'} size="sm" />
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+            <RiskBadge level={livePrediction?.risk_level || selectedFeature.severity || 'HIGH'} size="sm" />
             <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200 font-medium">
               {acknowledged ? 'Acknowledged' : (selectedFeature.status || 'Active')}
             </span>
+            {selectedFeature.type === 'TAPPED_LOCATION' && (
+              <span className="text-[10px] bg-sky-50 text-sky-700 px-2 py-0.5 rounded-md border border-sky-200 font-medium">
+                Map Tap Assessment
+              </span>
+            )}
           </div>
 
           <h3 className="font-semibold text-sm text-slate-900 leading-snug">
             {selectedFeature.title || 'Selected Risk Feature'}
           </h3>
 
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+          <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
             <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span>{selectedFeature.location_name || 'Papum Pare District'}</span>
-            {selectedFeature.coordinates && (
-              <span className="text-slate-400 font-mono text-[10px]">
-                [{selectedFeature.coordinates[1].toFixed(3)}°N, {selectedFeature.coordinates[0].toFixed(3)}°E]
-              </span>
-            )}
+            <span className="font-medium">{selectedFeature.location_name || 'Papum Pare District'}</span>
           </div>
+
+          {/* Exact Coordinates Strip with 1-click Copy */}
+          {lat !== undefined && lon !== undefined && (
+            <div className="mt-2.5 bg-slate-50 border border-slate-200/90 rounded-lg p-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-700">
+                <Navigation className="w-3 h-3 text-sky-600 shrink-0" />
+                <span className="font-semibold">{lat.toFixed(5)}°N, {lon.toFixed(5)}°E</span>
+              </div>
+              <button
+                onClick={handleCopyCoords}
+                className="px-2 py-0.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-medium rounded transition-colors flex items-center gap-1 cursor-pointer"
+                title="Copy exact coordinates to clipboard"
+              >
+                {copiedCoords ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span className="text-emerald-700 font-semibold">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-slate-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Risk Score & Model Confidence Grid */}
-        <div className="grid grid-cols-2 gap-2 bg-slate-50/80 border border-slate-200/80 p-3 rounded-lg">
-          <div>
-            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Risk Score</div>
-            <div className="text-lg font-bold text-slate-900 flex items-baseline gap-1 mt-0.5">
-              {((selectedFeature.risk_score || 0.88) * 100).toFixed(0)}%
-              <span className="text-xs font-medium text-rose-600">Critical</span>
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2 bg-slate-50/80 border border-slate-200/80 p-3 rounded-lg">
+            <div>
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">Risk Score</div>
+              <div className="text-lg font-bold text-slate-900 flex items-baseline gap-1 mt-0.5">
+                {livePrediction 
+                  ? `${((livePrediction.risk_score || 0) * 100).toFixed(0)}%`
+                  : `${((selectedFeature.risk_score || 0.88) * 100).toFixed(0)}%`
+                }
+                <span className="text-xs font-medium text-rose-600">
+                  {livePrediction?.risk_level || selectedFeature.severity || 'High'}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">ML Model</div>
+              <div className="text-lg font-bold text-slate-900 mt-0.5">
+                {livePrediction 
+                  ? `${((livePrediction.confidence || 0.9) * 100).toFixed(0)}%`
+                  : `${((selectedFeature.confidence || 0.92) * 100).toFixed(0)}%`
+                }
+                <span className="text-[10px] text-sky-700 font-mono block">
+                  {livePrediction?.model_version || selectedFeature.model_version || 'v1.4.2-XGBoost'}
+                </span>
+              </div>
             </div>
           </div>
-          <div>
-            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">ML Confidence</div>
-            <div className="text-lg font-bold text-slate-900 mt-0.5">
-              {((selectedFeature.confidence || 0.92) * 100).toFixed(0)}%
-              <span className="text-[10px] text-slate-400 font-mono block">v1.4-XGBoost</span>
-            </div>
-          </div>
+
+          {lat !== undefined && lon !== undefined && (
+            <button
+              onClick={handleRunAiPrediction}
+              disabled={mlLoading}
+              className="w-full py-1.5 px-2.5 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              <Cpu className={`w-3.5 h-3.5 ${mlLoading ? 'animate-spin' : 'text-sky-600'}`} />
+              <span>{mlLoading ? 'Computing ML Prediction...' : 'Re-run M1 AI Prediction for Location'}</span>
+            </button>
+          )}
         </div>
 
         {/* Environmental Triggers & Sensor Telemetry */}
@@ -103,14 +185,15 @@ export function LocationDetailsPanel() {
             </div>
             <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg">
               <span className="text-[10px] text-slate-500 font-medium block">Terrain Slope</span>
-              <span className="text-sm font-bold text-slate-800 font-mono">32.5°</span>
+              <span className="text-sm font-bold text-slate-800 font-mono">{selectedFeature.slope_deg || 32.5}°</span>
             </div>
             <div className="bg-slate-50 border border-slate-200/80 p-2.5 rounded-lg">
               <span className="text-[10px] text-slate-500 font-medium block">SAR Shift Rate</span>
-              <span className="text-sm font-bold text-slate-800 font-mono">-14.2 mm/yr</span>
+              <span className="text-sm font-bold text-slate-800 font-mono">{selectedFeature.sar_displacement_mm_yr ? `${selectedFeature.sar_displacement_mm_yr} mm/yr` : '-14.2 mm/yr'}</span>
             </div>
           </div>
         </div>
+
 
         {/* Affected Infrastructure */}
         <div>

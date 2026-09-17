@@ -15,6 +15,7 @@ import { MOCK_ALERTS } from '../../data/mock/alertsData.js';
 import { alertService } from '../../services/alerts/alertService.js';
 import { infrastructureService } from '../../services/infrastructure/infrastructureService.js';
 import { reportService } from '../../services/reports/reportService.js';
+import { riskService } from '../../services/risk/riskService.js';
 
 // Basemap style configurations (OpenStreetMap variants)
 const BASEMAP_STYLES = {
@@ -86,12 +87,47 @@ const BASEMAP_STYLES = {
   'osm-light': 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
 };
 
+/**
+ * Creates animated pulsing pin marker DOM element for tapped location
+ */
+function createMarkerElement(riskLevel) {
+  const colorMap = {
+    CRITICAL: { pin: '#e11d48', pulse: 'rgba(225, 29, 72, 0.45)' },
+    HIGH: { pin: '#ea580c', pulse: 'rgba(234, 88, 12, 0.45)' },
+    MODERATE: { pin: '#d97706', pulse: 'rgba(217, 119, 6, 0.45)' },
+    LOW: { pin: '#059669', pulse: 'rgba(5, 150, 105, 0.45)' }
+  };
+  const color = colorMap[riskLevel] || colorMap.HIGH;
+
+  const container = document.createElement('div');
+  container.className = 'tapped-location-marker';
+
+  const pulse = document.createElement('div');
+  pulse.className = 'tapped-marker-pulse';
+  pulse.style.backgroundColor = color.pulse;
+  pulse.style.boxShadow = `0 0 16px ${color.pin}`;
+
+  const pin = document.createElement('div');
+  pin.className = 'tapped-marker-pin';
+  pin.style.backgroundColor = color.pin;
+
+  const dot = document.createElement('div');
+  dot.className = 'tapped-marker-dot';
+
+  pin.appendChild(dot);
+  container.appendChild(pulse);
+  container.appendChild(pin);
+
+  return container;
+}
+
 export function MapLibreViewer() {
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const tappedMarkerRef = useRef(null);
 
   const { layers, activeBasemap } = useLayers();
-  const { selectFeature, mapViewState } = useSelection();
+  const { selectFeature, mapViewState, selectedFeature } = useSelection();
   const { selectedState, selectedDistrict, selectedSubdivision } = useRegion();
   const [mapLoaded, setMapLoaded] = useState(false);
 
@@ -104,7 +140,29 @@ export function MapLibreViewer() {
   const prevSubdivisionIdRef = useRef(selectedSubdivision?.id);
   const prevStateIdRef = useRef(selectedState?.id);
 
-  // Setup GeoJSON Sources and Layers
+  // Method to render / update marker at given coordinates
+  const showPinOnMap = useCallback((map, coordinates, data) => {
+    if (!map || !coordinates || coordinates.length !== 2) return;
+
+    // Clean up existing marker
+    if (tappedMarkerRef.current) {
+      tappedMarkerRef.current.remove();
+      tappedMarkerRef.current = null;
+    }
+
+    // Add glowing animated target pin marker
+    const markerEl = createMarkerElement(data.severity || data.risk_level);
+    const marker = new maplibregl.Marker({
+      element: markerEl,
+      anchor: 'bottom'
+    })
+      .setLngLat(coordinates)
+      .addTo(map);
+
+    tappedMarkerRef.current = marker;
+  }, []);
+
+  // Setup GeoJSON Sources, Layers, and Unified Tap/Click Listener
   const setupSourcesAndLayers = useCallback((map) => {
     if (!map) return;
 
@@ -151,30 +209,8 @@ export function MapLibreViewer() {
         }
       });
 
-      map.on('click', 'layer-risk-zones-fill', (e) => {
-        if (e.features && e.features.length > 0) {
-          const props = e.features[0].properties;
-          selectFeatureRef.current({
-            type: 'RISK_ZONE',
-            id: props.zone_id || 'zone-1',
-            title: `Landslide Risk Zone — ${props.name || 'Sector'}`,
-            severity: props.risk_level || 'CRITICAL',
-            priority: props.risk_level === 'CRITICAL' ? 'P1' : 'P2',
-            coordinates: [e.lngLat.lng, e.lngLat.lat],
-            location_name: props.sub_division || 'Papum Pare',
-            risk_score: props.risk_score || 0.88,
-            confidence: props.confidence || 0.92,
-            rainfall_24h: 142.0,
-            soil_saturation: 84.0,
-            affected_infrastructure: [props.primary_exposure || 'Trans-Arunachal Highway'],
-            recommended_action: 'Deploy emergency monitoring team and inspect slopes.',
-            status: 'ACTIVE'
-          });
-        }
-      });
-
       map.on('mouseenter', 'layer-risk-zones-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'layer-risk-zones-fill', () => { map.getCanvas().style.cursor = ''; });
+      map.on('mouseleave', 'layer-risk-zones-fill', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 2. ROAD NETWORK LINE LAYER
@@ -201,6 +237,9 @@ export function MapLibreViewer() {
           'line-opacity': 0.85
         }
       });
+
+      map.on('mouseenter', 'layer-roads-line', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'layer-roads-line', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 3. VILLAGES LAYER
@@ -221,6 +260,9 @@ export function MapLibreViewer() {
           'circle-stroke-width': 1.5
         }
       });
+
+      map.on('mouseenter', 'layer-villages-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'layer-villages-circle', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 4. CRITICAL INFRASTRUCTURE LAYER
@@ -241,6 +283,9 @@ export function MapLibreViewer() {
           'circle-stroke-width': 2
         }
       });
+
+      map.on('mouseenter', 'layer-infra-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'layer-infra-circle', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 5. ACTIVE WARNINGS MARKER LAYER
@@ -278,14 +323,8 @@ export function MapLibreViewer() {
         }
       });
 
-      map.on('click', 'layer-active-alerts-circle', (e) => {
-        if (e.features && e.features.length > 0) {
-          selectFeatureRef.current(e.features[0].properties);
-        }
-      });
-
       map.on('mouseenter', 'layer-active-alerts-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'layer-active-alerts-circle', () => { map.getCanvas().style.cursor = ''; });
+      map.on('mouseleave', 'layer-active-alerts-circle', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 6. CITIZEN REPORTS LAYER (unverified)
@@ -307,29 +346,8 @@ export function MapLibreViewer() {
         }
       });
 
-      map.on('click', 'layer-citizen-reports-circle', (e) => {
-        if (e.features && e.features.length > 0) {
-          const props = e.features[0].properties;
-          selectFeatureRef.current({
-            type: 'CITIZEN_REPORT',
-            id: props.id,
-            title: `Citizen Report — ${props.location_name || 'Unknown'}`,
-            severity: props.severity || 'MODERATE',
-            priority: props.severity === 'CRITICAL' ? 'P1' : 'P3',
-            coordinates: [e.lngLat.lng, e.lngLat.lat],
-            location_name: props.location_name || 'Papum Pare',
-            risk_score: 0.65,
-            confidence: 0.72,
-            rainfall_24h: 95.0,
-            soil_saturation: 68.0,
-            affected_infrastructure: [props.description || 'Reported via mobile app'],
-            recommended_action: 'Dispatch field officer for ground verification.',
-            status: props.verification_status || 'UNVERIFIED'
-          });
-        }
-      });
       map.on('mouseenter', 'layer-citizen-reports-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'layer-citizen-reports-circle', () => { map.getCanvas().style.cursor = ''; });
+      map.on('mouseleave', 'layer-citizen-reports-circle', () => { map.getCanvas().style.cursor = 'crosshair'; });
     }
 
     // 7. VERIFIED REPORTS LAYER
@@ -351,40 +369,221 @@ export function MapLibreViewer() {
         }
       });
 
-      map.on('click', 'layer-verified-reports-circle', (e) => {
-        if (e.features && e.features.length > 0) {
-          const props = e.features[0].properties;
-          selectFeatureRef.current({
+      map.on('mouseenter', 'layer-verified-reports-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'layer-verified-reports-circle', () => { map.getCanvas().style.cursor = 'crosshair'; });
+    }
+
+    // 8. UNIVERSAL TAP / CLICK LISTENER ON THE MAP
+    // Captures exact coordinates anywhere clicked and shows comprehensive risk assessment
+    map.off('click'); // Remove any prior click listeners to prevent duplicates
+    map.on('click', (e) => {
+      const lng = e.lngLat.lng;
+      const lat = e.lngLat.lat;
+
+      const interactiveLayers = [
+        'layer-active-alerts-circle',
+        'layer-citizen-reports-circle',
+        'layer-verified-reports-circle',
+        'layer-risk-zones-fill',
+        'layer-roads-line',
+        'layer-villages-circle',
+        'layer-infra-circle'
+      ].filter(id => map.getLayer(id));
+
+      const features = map.queryRenderedFeatures(e.point, { layers: interactiveLayers });
+
+      let featurePayload = null;
+
+      if (features && features.length > 0) {
+        const topFeature = features[0];
+        const props = topFeature.properties || {};
+
+        if (topFeature.layer.id === 'layer-active-alerts-circle') {
+          featurePayload = {
+            ...props,
+            type: 'ALERT',
+            coordinates: [lng, lat]
+          };
+        } else if (topFeature.layer.id === 'layer-risk-zones-fill') {
+          featurePayload = {
+            type: 'RISK_ZONE',
+            id: props.zone_id || 'zone-1',
+            title: `Landslide Risk Zone — ${props.name || 'Sector'}`,
+            severity: props.risk_level || 'CRITICAL',
+            priority: props.risk_level === 'CRITICAL' ? 'P1' : 'P2',
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
+            location_name: props.district ? `${props.name || 'Sector'}, ${props.district}` : (props.name || 'Sector'),
+            risk_score: props.risk_score || 0.88,
+            confidence: props.confidence || 0.92,
+            rainfall_24h: props.rainfall_24h_mm || 142.0,
+            soil_saturation: props.soil_moisture_pct || 84.0,
+            slope_deg: props.slope_deg || 42.0,
+            sar_displacement_mm_yr: props.sar_shift_mm_yr || -16.0,
+            affected_infrastructure: [props.nearest_road || 'Trans-Arunachal Highway', props.nearest_settlement || 'Local Settlement'],
+            recommended_action: props.risk_level === 'CRITICAL'
+              ? 'Deploy emergency monitoring team and inspect downslope cuts.'
+              : 'Slope watch active. Monitor radar telemetry.',
+            status: 'ACTIVE'
+          };
+        } else if (topFeature.layer.id === 'layer-roads-line') {
+          featurePayload = {
+            type: 'ROAD_NETWORK',
+            id: props.road_id || 'road-1',
+            title: props.name || 'Highway Corridor',
+            severity: props.hazard_level || 'HIGH',
+            priority: props.hazard_level === 'CRITICAL' ? 'P1' : 'P2',
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
+            location_name: `${props.name} (${props.district || 'Papum Pare'})`,
+            risk_score: props.hazard_level === 'CRITICAL' ? 0.90 : 0.74,
+            confidence: 0.89,
+            rainfall_24h: 110.0,
+            soil_saturation: 76.0,
+            slope_deg: 35.0,
+            sar_displacement_mm_yr: -12.4,
+            affected_infrastructure: [props.name, props.vulnerable_choke_points || 'Active slope choke points'],
+            recommended_action: props.status || 'Active traffic advisory. Road clearance teams on alert.',
+            status: props.status || 'WATCH'
+          };
+        } else if (topFeature.layer.id === 'layer-villages-circle') {
+          featurePayload = {
+            type: 'VILLAGE',
+            id: props.infra_id || 'vil-1',
+            title: `Village Habitation — ${props.name}`,
+            severity: props.risk_exposure || 'MODERATE',
+            priority: props.risk_exposure === 'CRITICAL' ? 'P1' : 'P2',
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
+            location_name: `${props.name}, ${props.district}`,
+            risk_score: props.risk_exposure === 'CRITICAL' ? 0.86 : 0.62,
+            confidence: 0.90,
+            rainfall_24h: 95.0,
+            soil_saturation: 70.0,
+            slope_deg: 28.0,
+            affected_infrastructure: [`Habitation Population: ${props.population || '—'}`, props.nearest_road || 'Local Access Corridor'],
+            recommended_action: `Monitor village perimeter. Community early warning alert: ${props.risk_exposure || 'MODERATE'}.`,
+            status: 'HABITATION'
+          };
+        } else if (topFeature.layer.id === 'layer-infra-circle') {
+          featurePayload = {
+            type: 'INFRASTRUCTURE',
+            id: props.infra_id || 'infra-1',
+            title: props.name || 'Critical Facility',
+            severity: props.risk_exposure || 'HIGH',
+            priority: 'P2',
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
+            location_name: `${props.name}, ${props.district}`,
+            risk_score: 0.76,
+            confidence: 0.91,
+            rainfall_24h: 105.0,
+            soil_saturation: 74.0,
+            slope_deg: 30.0,
+            affected_infrastructure: [props.name, props.category || 'Strategic Asset'],
+            recommended_action: 'Perform structural integrity inspection and check foundation drainage.',
+            status: 'STRATEGIC'
+          };
+        } else if (topFeature.layer.id === 'layer-citizen-reports-circle') {
+          featurePayload = {
+            type: 'CITIZEN_REPORT',
+            id: props.id,
+            title: `Citizen Report — ${props.location_name || 'Sector'}`,
+            severity: props.severity || 'MODERATE',
+            priority: props.severity === 'CRITICAL' ? 'P1' : 'P3',
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
+            location_name: props.location_name || 'Papum Pare',
+            risk_score: 0.65,
+            confidence: 0.72,
+            rainfall_24h: 95.0,
+            soil_saturation: 68.0,
+            slope_deg: 32.0,
+            affected_infrastructure: [props.description || 'Reported via mobile app'],
+            recommended_action: 'Dispatch field officer for ground verification.',
+            status: props.verification_status || 'UNVERIFIED'
+          };
+        } else if (topFeature.layer.id === 'layer-verified-reports-circle') {
+          featurePayload = {
             type: 'VERIFIED_REPORT',
             id: props.id,
-            title: `Verified Report — ${props.location_name || 'Unknown'}`,
+            title: `Verified Report — ${props.location_name || 'Sector'}`,
             severity: props.severity || 'MODERATE',
             priority: props.severity === 'CRITICAL' ? 'P1' : 'P2',
-            coordinates: [e.lngLat.lng, e.lngLat.lat],
+            coordinates: [lng, lat],
+            latitude: lat,
+            longitude: lng,
             location_name: props.location_name || 'Papum Pare',
             risk_score: 0.80,
             confidence: 0.90,
             rainfall_24h: 120.0,
             soil_saturation: 78.0,
+            slope_deg: 36.0,
             affected_infrastructure: [props.description || 'Ground-verified by DDMO'],
             recommended_action: 'Continue monitoring. Report verified by field team.',
             status: 'VERIFIED'
-          });
+          };
         }
-      });
-      map.on('mouseenter', 'layer-verified-reports-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
-      map.on('mouseleave', 'layer-verified-reports-circle', () => { map.getCanvas().style.cursor = ''; });
-    }
+      }
+
+      // If no interactive layer feature was clicked, evaluate exact tapped coordinates
+      if (!featurePayload) {
+        const spatialEval = riskService.evaluatePointRisk(lat, lng);
+        featurePayload = {
+          type: 'TAPPED_LOCATION',
+          id: `LOC-${lat.toFixed(4)}-${lng.toFixed(4)}`,
+          title: `Tapped Location Assessment`,
+          severity: spatialEval.risk_level,
+          priority: spatialEval.risk_level === 'CRITICAL' ? 'P1' : (spatialEval.risk_level === 'HIGH' ? 'P2' : 'P3'),
+          coordinates: [lng, lat],
+          latitude: lat,
+          longitude: lng,
+          location_name: spatialEval.location_name,
+          district: spatialEval.district,
+          state: spatialEval.state,
+          risk_score: spatialEval.risk_score,
+          confidence: spatialEval.confidence,
+          model_version: spatialEval.model_version,
+          rainfall_24h: spatialEval.rainfall_24h,
+          soil_saturation: spatialEval.soil_saturation,
+          slope_deg: spatialEval.slope_deg,
+          sar_displacement_mm_yr: spatialEval.sar_displacement_mm_yr,
+          nearest_road: spatialEval.nearest_road,
+          nearest_settlement: spatialEval.nearest_settlement,
+          distance_to_road_km: spatialEval.distance_to_road_km,
+          distance_to_settlement_km: spatialEval.distance_to_settlement_km,
+          affected_infrastructure: spatialEval.affected_infrastructure,
+          recommended_action: spatialEval.recommended_action,
+          status: spatialEval.status,
+          timestamp: spatialEval.timestamp
+        };
+      }
+
+      // Render pulsing marker on map
+      showPinOnMap(map, [lng, lat], featurePayload);
+
+      // Select feature so LocationDetailsPanel slides open with full data
+      selectFeatureRef.current(featurePayload);
+    });
+
+    // Set default canvas crosshair cursor to indicate tap-to-inspect capability
+    map.getCanvas().style.cursor = 'crosshair';
 
     // Dynamic Live Data Sync (Async)
     (async () => {
       try {
-        const [liveRoads, liveInfra, liveVillages, liveAlerts, liveReports] = await Promise.allSettled([
+        const [liveRoads, liveInfra, liveVillages, liveAlerts, liveReports, liveGeoReports] = await Promise.allSettled([
           infrastructureService.getRoadNetwork(),
           infrastructureService.getFacilities(),
           infrastructureService.getVillages(),
           alertService.getActiveAlerts(),
           reportService.getReports(),
+          reportService.getReportsGeoJSON(),
         ]);
 
         if (mapRef.current && map.isStyleLoaded()) {
@@ -407,7 +606,11 @@ export function MapLibreViewer() {
               }))
             });
           }
-          if (liveReports.status === 'fulfilled' && Array.isArray(liveReports.value)) {
+          if (liveGeoReports.status === 'fulfilled' && liveGeoReports.value?.features?.length > 0) {
+            if (map.getSource('source-citizen-reports')) {
+              map.getSource('source-citizen-reports').setData(liveGeoReports.value);
+            }
+          } else if (liveReports.status === 'fulfilled' && Array.isArray(liveReports.value)) {
             const citizenFeatures = liveReports.value
               .filter(r => r.verification_status !== 'VERIFIED')
               .map(r => ({
@@ -443,7 +646,7 @@ export function MapLibreViewer() {
         console.warn('[MapLibreViewer] Live layer sync fallback:', err);
       }
     })();
-  }, []);
+  }, [showPinOnMap]);
 
   // Initialize MapLibre GL instance
   useEffect(() => {
@@ -469,6 +672,10 @@ export function MapLibreViewer() {
     });
 
     return () => {
+      if (tappedMarkerRef.current) {
+        tappedMarkerRef.current.remove();
+        tappedMarkerRef.current = null;
+      }
       map.remove();
       mapRef.current = null;
     };
@@ -485,6 +692,37 @@ export function MapLibreViewer() {
       });
     }
   }, [mapViewState, mapLoaded]);
+
+  // Sync marker with selectedFeature when changed externally or cleared
+  useEffect(() => {
+    if (!mapRef.current || !mapLoaded) return;
+    const map = mapRef.current;
+
+    if (!selectedFeature) {
+      if (tappedMarkerRef.current) {
+        tappedMarkerRef.current.remove();
+        tappedMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const coords = selectedFeature.coordinates || (
+      selectedFeature.longitude !== undefined && selectedFeature.latitude !== undefined
+        ? [selectedFeature.longitude, selectedFeature.latitude]
+        : null
+    );
+
+    if (coords && coords.length === 2) {
+      const currentLngLat = tappedMarkerRef.current?.getLngLat();
+      const isSameLocation = currentLngLat &&
+        Math.abs(currentLngLat.lng - coords[0]) < 0.0001 &&
+        Math.abs(currentLngLat.lat - coords[1]) < 0.0001;
+
+      if (!isSameLocation) {
+        showPinOnMap(map, coords, selectedFeature);
+      }
+    }
+  }, [selectedFeature, mapLoaded, showPinOnMap]);
 
   // Respond ONLY when District / Subdivision / State dropdown selection actually changes in Header
   useEffect(() => {
@@ -591,6 +829,12 @@ export function MapLibreViewer() {
       {/* Floating Legend (Bottom Left) */}
       <div className="absolute bottom-3 left-3 z-20">
         <MapLegend />
+      </div>
+
+      {/* Tap Coordinates & Risk Instruction Pill (Bottom Center) */}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none bg-slate-900/85 backdrop-blur-md text-white border border-slate-700/60 px-3 py-1 rounded-full text-[11px] font-medium shadow-md flex items-center gap-2 select-none">
+        <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse"></span>
+        <span>Tap anywhere on map for exact coordinates & risk analysis</span>
       </div>
 
       {/* Location Detail Panel Overlay (Top Right / Sliding) */}
