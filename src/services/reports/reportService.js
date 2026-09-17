@@ -6,19 +6,62 @@ let mockReportsStore = [...INITIAL_REPORTS];
 function transformBackendReport(report) {
   const isVerified = report.status === 'VERIFIED';
   const isPending = report.status === 'PENDING';
+  
+  let mediaList = Array.isArray(report.media) ? [...report.media] : [];
+  if (mediaList.length === 0) {
+    if (report.photo_url) {
+      mediaList.push({
+        id: `MED-${report.id}-P1`,
+        type: 'photo',
+        title: 'Report Incident Photograph',
+        caption: report.photo_caption || report.description || 'Uploaded incident photo',
+        url: report.photo_url,
+        thumbnail: report.photo_url,
+        source: 'CITIZEN_UPLOAD',
+        source_label: 'Citizen Mobile App',
+        captured_at: report.capture_timestamp || new Date().toISOString(),
+        coordinates: [report.longitude, report.latitude]
+      });
+    }
+    if (report.video_url) {
+      mediaList.push({
+        id: `MED-${report.id}-V1`,
+        type: 'video',
+        title: 'Report Video Capture',
+        caption: 'Citizen or field recorded video stream',
+        url: report.video_url,
+        source: 'CITIZEN_UPLOAD',
+        source_label: 'Mobile Video Capture',
+        captured_at: report.capture_timestamp || new Date().toISOString(),
+        coordinates: [report.longitude, report.latitude]
+      });
+    }
+  }
+
+  const photoCount = report.photo_count ?? mediaList.filter(m => m.type === 'photo').length;
+  const videoCount = report.video_count ?? mediaList.filter(m => m.type === 'video').length;
+
   return {
     id: String(report.id),
-    location_name: report.description ? report.description.slice(0, 35) : `Sector [${report.latitude?.toFixed(2)}, ${report.longitude?.toFixed(2)}]`,
-    district: 'Papum Pare',
+    location_name: report.location_name || (report.description ? report.description.slice(0, 35) : `Sector [${report.latitude?.toFixed(2)}, ${report.longitude?.toFixed(2)}]`),
+    district: report.district || 'Papum Pare',
     coordinates: [report.longitude, report.latitude],
-    severity: report.report_type === 'LANDSLIDE' ? 'CRITICAL' : 'HIGH',
+    severity: report.severity || (report.report_type === 'LANDSLIDE' ? 'CRITICAL' : 'HIGH'),
     verification_status: isVerified ? 'VERIFIED' : (isPending ? 'UNVERIFIED' : report.status),
     status: isVerified ? 'UNDER_MONITORING' : (report.status === 'REJECTED' ? 'REJECTED' : 'PENDING_VERIFICATION'),
-    reporter_type: 'CITIZEN',
-    reporter_name: 'Field Contributor',
-    reported_at: report.capture_timestamp || report.created_at || new Date().toISOString(),
+    reporter_type: report.reporter_type || 'CITIZEN',
+    reporter_name: report.reporter_name || 'Field Contributor',
+    reported_at: report.capture_timestamp || report.reported_at || report.created_at || new Date().toISOString(),
     description: report.description || 'Ground observation report',
-    media_available: Boolean(report.media && report.media.length > 0),
+    media_available: Boolean(mediaList.length > 0 || report.media_available),
+    media: mediaList,
+    photo_count: photoCount,
+    video_count: videoCount,
+    photo_caption: report.photo_caption,
+    verification_notes: report.verification_notes || report.remarks,
+    verified_by: report.verified_by,
+    verified_at: report.verified_at,
+    checklist: report.checklist || []
   };
 }
 
@@ -99,6 +142,7 @@ export const reportService = {
             verification_status: status,
             verified_by: 'DDMO Duty Officer (Local Verification)',
             verified_at: new Date().toISOString(),
+            verification_notes: remarks,
             status: status === 'VERIFIED' ? 'UNDER_MONITORING' : 'REJECTED'
           };
         }

@@ -489,10 +489,19 @@ export function MapLibreViewer() {
             status: 'STRATEGIC'
           };
         } else if (topFeature.layer.id === 'layer-citizen-reports-circle') {
+          let parsedMedia = props.media;
+          if (typeof parsedMedia === 'string') {
+            try { parsedMedia = JSON.parse(parsedMedia); } catch {}
+          }
+          let parsedChecklist = props.checklist;
+          if (typeof parsedChecklist === 'string') {
+            try { parsedChecklist = JSON.parse(parsedChecklist); } catch {}
+          }
+
           featurePayload = {
             type: 'CITIZEN_REPORT',
             id: props.id,
-            title: `Citizen Report — ${props.location_name || 'Sector'}`,
+            title: props.description || `Citizen Report — ${props.location_name || 'Sector'}`,
             severity: props.severity || 'MODERATE',
             priority: props.severity === 'CRITICAL' ? 'P1' : 'P3',
             coordinates: [lng, lat],
@@ -506,13 +515,34 @@ export function MapLibreViewer() {
             slope_deg: 32.0,
             affected_infrastructure: [props.description || 'Reported via mobile app'],
             recommended_action: 'Dispatch field officer for ground verification.',
-            status: props.verification_status || 'UNVERIFIED'
+            status: props.verification_status || 'UNVERIFIED',
+            verification_status: props.verification_status || 'UNVERIFIED',
+            media: parsedMedia || [],
+            photo_count: props.photo_count || (parsedMedia?.filter(m => m.type === 'photo')?.length || 0),
+            video_count: props.video_count || (parsedMedia?.filter(m => m.type === 'video')?.length || 0),
+            reporter_name: props.reporter_name || 'Citizen User',
+            reporter_type: props.reporter_type || 'CITIZEN',
+            reported_at: props.reported_at || props.created_at,
+            description: props.description,
+            checklist: parsedChecklist || [],
+            verified_by: props.verified_by,
+            verified_at: props.verified_at,
+            verification_notes: props.verification_notes
           };
         } else if (topFeature.layer.id === 'layer-verified-reports-circle') {
+          let parsedMedia = props.media;
+          if (typeof parsedMedia === 'string') {
+            try { parsedMedia = JSON.parse(parsedMedia); } catch {}
+          }
+          let parsedChecklist = props.checklist;
+          if (typeof parsedChecklist === 'string') {
+            try { parsedChecklist = JSON.parse(parsedChecklist); } catch {}
+          }
+
           featurePayload = {
             type: 'VERIFIED_REPORT',
             id: props.id,
-            title: `Verified Report — ${props.location_name || 'Sector'}`,
+            title: props.description || `Verified Report — ${props.location_name || 'Sector'}`,
             severity: props.severity || 'MODERATE',
             priority: props.severity === 'CRITICAL' ? 'P1' : 'P2',
             coordinates: [lng, lat],
@@ -526,7 +556,19 @@ export function MapLibreViewer() {
             slope_deg: 36.0,
             affected_infrastructure: [props.description || 'Ground-verified by DDMO'],
             recommended_action: 'Continue monitoring. Report verified by field team.',
-            status: 'VERIFIED'
+            status: 'VERIFIED',
+            verification_status: 'VERIFIED',
+            media: parsedMedia || [],
+            photo_count: props.photo_count || (parsedMedia?.filter(m => m.type === 'photo')?.length || 0),
+            video_count: props.video_count || (parsedMedia?.filter(m => m.type === 'video')?.length || 0),
+            reporter_name: props.reporter_name || 'Field Officer',
+            reporter_type: props.reporter_type || 'FIELD_OFFICER',
+            reported_at: props.reported_at || props.created_at,
+            description: props.description,
+            checklist: parsedChecklist || [],
+            verified_by: props.verified_by || 'DDMO Ground Cell',
+            verified_at: props.verified_at,
+            verification_notes: props.verification_notes
           };
         }
       }
